@@ -1,0 +1,71 @@
+%% Pulse-Doppler Radar: Range & Velocity Estimation
+clear; clc; close all;
+
+% --- 1. System Parameters ---
+fs = 1e6;               % Sampling frequency (1 MHz)
+fc = 100e3;             % Carrier frequency (100 kHz)
+c = 3e8;                % Speed of light
+pulse_width = 1e-3;     % 1ms pulse (longer for better frequency resolution)
+
+% --- 2. Target Parameters ---
+target_dist = 15000;    % 15 km away
+target_vel = 150;       % 150 m/s (approx 540 km/h)
+
+% --- 3. Generate Transmit Pulse (Sine Wave) ---
+t_pulse = 0:1/fs:pulse_width;
+tx_pulse = sin(2 * pi * fc * t_pulse); 
+
+% --- 4. Create Received Signal with Doppler Shift ---
+% Calculate Round Trip Time (RTT)
+rtt = (2 * target_dist) / c;
+delay_samples = round(rtt * fs);
+
+% Calculate Doppler Shift (fd = 2 * v * fc / c)
+fd = (2 * target_vel * fc) / c;
+
+% Received signal has delay AND a new frequency (fc + fd)
+t_rx = 0:1/fs:(pulse_width); 
+rx_pulse = sin(2 * pi * (fc + fd) * t_rx);
+
+% Create the full environment
+total_samples = delay_samples + length(tx_pulse) + 500;
+rx_signal = zeros(1, total_samples);
+rx_signal(delay_samples + 1 : delay_samples + length(tx_pulse)) = rx_pulse;
+
+% Add Noise (SNR = 0dB for clearer Doppler visualization)
+rx_noisy = awgn(rx_signal, 0, 'measured');
+
+% --- 5. Range Estimation (Matched Filter) ---
+[correlation, lags] = xcorr(rx_noisy, tx_pulse);
+correlation = correlation(lags >= 0);
+[~, delay_idx] = max(correlation);
+est_range = (delay_idx / fs * c) / 2;
+
+% --- 6. Velocity Estimation (FFT) ---
+% Extract the pulse from the noisy signal to analyze its frequency
+extracted_pulse = rx_noisy(delay_idx : delay_idx + length(tx_pulse) - 1);
+N = length(extracted_pulse);
+f_axis = (-fs/2 : fs/N : fs/2 - fs/N);
+fft_pulse = abs(fftshift(fft(extracted_pulse)));
+
+% Find the peak frequency
+[~, max_idx] = max(fft_pulse);
+est_fc_plus_fd = abs(f_axis(max_idx));
+est_fd = est_fc_plus_fd - fc;
+est_vel = (est_fd * c) / (2 * fc);
+
+% --- 7. Visualization ---
+figure('Position', [100, 100, 1000, 700]);
+
+subplot(2,1,1);
+plot(lags(1:length(correlation)), correlation, 'LineWidth', 1.5);
+title(['Range Peak: Estimated at ', num2str(est_range/1000), ' km']);
+grid on; ylabel('Correlation');
+
+subplot(2,1,2);
+plot(f_axis/1000, fft_pulse, 'Color', [0 .5 0], 'LineWidth', 1.5);
+xlim([(fc-200)/1000, (fc+200)/1000]); % Zoom in near carrier frequency
+title(['Doppler Peak: Estimated Velocity at ', num2str(est_vel), ' m/s']);
+xlabel('Frequency (kHz)'); ylabel('Magnitude'); grid on;
+
+fprintf('Actual Velocity: %.2f m/s | Estimated: %.2f m/s\n', target_vel, est_vel);
